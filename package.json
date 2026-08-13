@@ -1,0 +1,16 @@
+{
+  "name": "ultimate-web-scraper-github-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remote crawler worker for Ultimate Web Scraper Pro using Playwright and GitHub Actions",
+  "type": "module",
+  "scripts": {
+    "crawl": "node worker/index.mjs",
+    "crawl:config": "node worker/run-config.mjs",
+    "crawl:workflow": "node worker/run-workflow.mjs"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "playwright": "^1.55.0"
+  }
+}

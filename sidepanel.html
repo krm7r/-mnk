@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ultimate Scraper Pro v6.1</title>
+  <link rel="stylesheet" href="sidepanel.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    /* تحسينات سريعة للواجهة الجديدة */
+    .scope-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    .scope-title { font-weight: bold; font-size: 12px; margin-bottom: 5px; color: #495057; display: flex; align-items: center; gap: 5px; }
+    .scope-input { width: 100%; border: 1px solid #ced4da; border-radius: 4px; padding: 5px 8px; font-size: 12px; font-family: monospace; margin-bottom: 8px; }
+    .scope-hint { font-size: 10px; color: #6c757d; margin-top: -5px; margin-bottom: 10px; }
+    .hidden { display: none !important; }
+    .badge-fast { background: #28a745; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; margin-right: 5px; }
+  </style>
+</head>
+<body>
+
+<nav id="topNav">
+  <button class="nav-btn active" data-page="page-single">
+    <i class="fas fa-file-code"></i><span>صفحة</span>
+  </button>
+  <button class="nav-btn" data-page="page-site">
+    <i class="fas fa-globe"></i><span>الموقع</span>
+  </button>
+  <button class="nav-btn" data-page="page-media">
+    <i class="fas fa-photo-film"></i><span>وسائط</span>
+  </button>
+  <button class="nav-btn" data-page="page-custom">
+    <i class="fas fa-list-check"></i><span>روابط</span>
+  </button>
+  <button class="nav-btn" data-page="page-extract">
+    <i class="fas fa-sitemap"></i><span>استخراج</span>
+  </button>
+  <button class="nav-btn" data-page="page-manual">
+    <i class="fas fa-hand-pointer"></i><span>يدوي</span>
+  </button>
+  <button class="nav-btn" data-page="page-xml">
+    <i class="fas fa-code"></i><span>XML</span>
+  </button>
+  <button class="nav-btn settings-btn" data-page="page-settings">
+    <i class="fas fa-sliders"></i><span>إعدادات</span>
+  </button>
+</nav>
+
+<div id="contentArea">
+
+  <!-- PAGE: صفحة واحدة -->
+  <div class="page active" id="page-single">
+    <div class="page-header">
+      <div class="page-icon" style="background:#e8f4fd">📄</div>
+      <div><h2>سحب صفحة واحدة</h2><p>سحب المحتوى الكامل للصفحة الحالية</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-filter"></i> ماذا تريد سحبه؟</div>
+      <div class="filters-grid">
+        <label class="filter-item"><input type="checkbox" id="s-fPages" checked> <i class="fas fa-code"></i> صفحة HTML</label>
+        <label class="filter-item"><input type="checkbox" id="s-fText" checked> <i class="fas fa-align-right"></i> نص الصفحة (يتجاوز منع النسخ)</label>
+        <label class="filter-item"><input type="checkbox" id="s-fImages" checked> <i class="fas fa-image"></i> صور</label>
+        <label class="filter-item"><input type="checkbox" id="s-fVideos"> <i class="fas fa-video"></i> فيديو</label>
+        <label class="filter-item"><input type="checkbox" id="s-fFiles" checked> <i class="fas fa-file-zipper"></i> ملفات</label>
+      </div>
+    </div>
+
+    <div class="status-panel" id="s-statusPanel">
+      <div class="status-text" id="s-status">جاهز — افتح الصفحة المطلوبة واضغط بدء</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="s-bar"></div></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" id="s-pages">0</div><div class="stat-lbl">صفحة</div></div>
+        <div class="stat-box"><div class="stat-val" id="s-media">0</div><div class="stat-lbl">وسائط</div></div>
+        <div class="stat-box"><div class="stat-val" id="s-phase">-</div><div class="stat-lbl">الحالة</div></div>
+      </div>
+    </div>
+
+    <div class="btn-row mb-8">
+      <button class="btn btn-primary" id="s-startBtn"><i class="fas fa-play"></i> بدء السحب</button>
+      <button class="btn btn-danger" id="s-stopBtn" disabled><i class="fas fa-stop"></i> إيقاف</button>
+    </div>
+    <div class="btn-row mb-8">
+      <button class="btn btn-success" id="s-downloadBtn" disabled><i class="fas fa-file-zipper"></i> تحميل ZIP</button>
+      <button class="btn btn-warning" id="s-driveBtn" disabled title="رفع ZIP لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+      <button class="btn btn-ghost" id="s-clearBtn"><i class="fas fa-trash"></i> مسح</button>
+    </div>
+  </div>
+
+  <!-- PAGE: الموقع بالكامل -->
+  <div class="page" id="page-site">
+    <div class="page-header">
+      <div class="page-icon" style="background:#e8f8f5">🌐</div>
+      <div><h2>سحب الموقع كامل</h2><p>سحب ذكي ومستمر بدون توقف</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-bullseye"></i> تحديد النطاق (Scope)</div>
+      <div class="scope-box">
+        <div class="scope-title"><i class="fas fa-check-circle" style="color:green"></i> نطاق محدد (يجب أن يحتوي الرابط على):</div>
+        <input type="text" id="site-include" class="scope-input" placeholder="مثال: /category/tools/ (اتركه فارغاً لكل الموقع)">
+        
+        <div class="scope-title"><i class="fas fa-ban" style="color:red"></i> حظر نطاق (تجاهل الروابط التي تحتوي على):</div>
+        <input type="text" id="site-exclude" class="scope-input" placeholder="مثال: /search/ أو ?query=">
+        <div class="scope-hint">استخدم الفاصلة (,) للفصل بين عدة كلمات</div>
+      </div>
+      <div class="form-row" style="margin-top:10px;">
+        <label>🔢 الحد الأقصى لعدد الصفحات لهذه المهمة</label>
+        <input type="number" id="site-maxPages" min="1" max="10000" placeholder="اتركه فارغاً لاستخدام الإعداد العام">
+        <div class="form-hint">لو سبته فاضي هيستخدم القيمة العامة من تبويب الإعدادات (حالياً كذا).</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-filter"></i> ماذا تريد سحبه؟</div>
+      <div class="filters-grid">
+        <label class="filter-item"><input type="checkbox" id="site-fPages" checked> <i class="fas fa-code"></i> صفحات HTML</label>
+        <label class="filter-item"><input type="checkbox" id="site-fText" checked> <i class="fas fa-align-right"></i> نص الصفحات (يتجاوز منع النسخ)</label>
+        <label class="filter-item"><input type="checkbox" id="site-fImages" checked> <i class="fas fa-image"></i> صور</label>
+        <label class="filter-item"><input type="checkbox" id="site-fVideos"> <i class="fas fa-video"></i> فيديو</label>
+        <label class="filter-item"><input type="checkbox" id="site-fFiles" checked> <i class="fas fa-file-zipper"></i> ملفات</label>
+        <label class="filter-item"><input type="checkbox" id="site-fLinks" checked> <i class="fas fa-link"></i> روابط</label>
+      </div>
+    </div>
+
+    <div class="card" id="site-linkTypesCard">
+      <div class="card-title"><i class="fas fa-sliders"></i> أنواع الروابط المطلوب جمعها</div>
+      <div class="filters-grid">
+        <label class="filter-item"><input type="checkbox" id="site-linkDownloads" checked> <i class="fas fa-download"></i> روابط تحميل (كل الأنواع)</label>
+        <label class="filter-item"><input type="checkbox" id="site-linkImages" checked> <i class="fas fa-image"></i> روابط صور</label>
+        <label class="filter-item"><input type="checkbox" id="site-linkGeneral" checked> <i class="fas fa-link"></i> روابط عامة (كل الموقع)</label>
+      </div>
+      <div class="form-hint">الأهم هو "روابط تحميل" — الإضافة تتنقل بين صفحات الموقع وتجمع كل روابط التحميل (ملفات مضغوطة/برامج + أي رابط عليه كلمة تحميل/تنزيل/download).</div>
+    </div>
+
+    <div class="status-panel">
+      <div class="status-text" id="site-status">جاهز — افتح أي صفحة من الموقع واضغط بدء</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="site-bar"></div></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" id="site-pages">0</div><div class="stat-lbl">صفحة</div></div>
+        <div class="stat-box"><div class="stat-val" id="site-links">0</div><div class="stat-lbl">رابط</div></div>
+        <div class="stat-box"><div class="stat-val" id="site-phase">-</div><div class="stat-lbl">الحالة</div></div>
+      </div>
+    </div>
+
+    <div class="btn-row mb-8">
+      <button class="btn btn-primary" id="site-startBtn"><i class="fas fa-play"></i> بدء السحب</button>
+      <button class="btn btn-danger" id="site-stopBtn" disabled><i class="fas fa-stop"></i> إيقاف</button>
+    </div>
+    <div class="btn-row mb-8">
+      <button class="btn btn-success" id="site-downloadBtn" disabled><i class="fas fa-file-zipper"></i> تحميل ZIP (الموجود حالياً)</button>
+      <button class="btn btn-warning" id="site-driveBtn" disabled title="رفع ZIP لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+    </div>
+    <div class="btn-row mb-8">
+      <button class="btn btn-info" id="site-downloadLinksBtn" disabled><i class="fas fa-file-lines"></i> تحميل الروابط TXT</button>
+      <button class="btn btn-warning" id="site-driveLinksBtn" disabled title="رفع روابط TXT لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+      <button class="btn btn-ghost" id="site-clearBtn"><i class="fas fa-trash"></i> مسح</button>
+    </div>
+  </div>
+
+  <!-- PAGE: وسائط فقط -->
+  <div class="page" id="page-media">
+    <div class="page-header">
+      <div class="page-icon" style="background:#fdf2fb">🖼️</div>
+      <div><h2>استخراج الوسائط</h2><p>صور، فيديوهات، ملفات من الصفحة الحالية</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-filter"></i> أنواع الوسائط</div>
+      <div class="filters-grid">
+        <label class="filter-item"><input type="checkbox" id="med-fImages" checked> <i class="fas fa-image"></i> صور</label>
+        <label class="filter-item"><input type="checkbox" id="med-fVideos" checked> <i class="fas fa-video"></i> فيديو</label>
+        <label class="filter-item"><input type="checkbox" id="med-fFiles" checked> <i class="fas fa-file-zipper"></i> ملفات/برامج</label>
+        <label class="filter-item"><input type="checkbox" id="med-fDownloads" checked> <i class="fas fa-download"></i> روابط تحميل</label>
+      </div>
+    </div>
+
+    <div class="status-panel">
+      <div class="status-text" id="med-status">جاهز — افتح الصفحة واضغط استخراج</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="med-bar"></div></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" id="med-images">0</div><div class="stat-lbl">صور</div></div>
+        <div class="stat-box"><div class="stat-val" id="med-videos">0</div><div class="stat-lbl">فيديو</div></div>
+        <div class="stat-box"><div class="stat-val" id="med-files">0</div><div class="stat-lbl">ملفات</div></div>
+      </div>
+    </div>
+
+    <div class="btn-row mb-8">
+      <button class="btn btn-primary" id="med-startBtn"><i class="fas fa-magnifying-glass"></i> استخراج</button>
+      <button class="btn btn-danger" id="med-stopBtn" disabled><i class="fas fa-stop"></i> إيقاف</button>
+    </div>
+    <div class="btn-row mb-8">
+      <button class="btn btn-success" id="med-downloadBtn" disabled><i class="fas fa-file-lines"></i> تحميل قائمة TXT</button>
+      <button class="btn btn-warning" id="med-driveBtn" disabled title="رفع TXT لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+      <button class="btn btn-ghost" id="med-clearBtn"><i class="fas fa-trash"></i> مسح</button>
+    </div>
+  </div>
+
+  <!-- PAGE: روابط محددة -->
+  <div class="page" id="page-custom">
+    <div class="page-header">
+      <div class="page-icon" style="background:#fef9e7">🔗</div>
+      <div><h2>روابط محددة</h2><p>أدخل روابط — كل رابط يُسحب في ملف منفصل</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <i class="fas fa-link"></i> قائمة الروابط
+        <span class="url-counter-badge" id="custom-counter">0 رابط</span>
+      </div>
+      
+      <div style="margin-bottom: 12px;">
+        <button class="btn btn-ghost btn-full" id="custom-uploadBtn" style="font-size:12px;">
+          <i class="fas fa-cloud-arrow-up"></i> رفع ملف txt (رابط في كل سطر)
+        </button>
+        <input type="file" id="custom-fileInput" accept=".txt" style="display:none;">
+        <div id="custom-uploadStatus" style="font-size:11px;color:#666;margin-top:6px;text-align:center;"></div>
+      </div>
+
+      <div class="url-inputs-wrap" id="custom-urlInputs"></div>
+      <button class="btn btn-primary btn-full" id="custom-addBtn" style="font-size:12px;">
+        <i class="fas fa-plus"></i> إضافة رابط جديد
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-filter"></i> الفلاتر</div>
+      <div class="filters-grid">
+        <label class="filter-item"><input type="checkbox" id="cust-fPages" checked> <i class="fas fa-code"></i> صفحات</label>
+        <label class="filter-item"><input type="checkbox" id="cust-fText" checked> <i class="fas fa-align-right"></i> نص الصفحات (يتجاوز منع النسخ)</label>
+        <label class="filter-item"><input type="checkbox" id="cust-fImages" checked> <i class="fas fa-image"></i> صور</label>
+        <label class="filter-item"><input type="checkbox" id="cust-fVideos"> <i class="fas fa-video"></i> فيديو</label>
+        <label class="filter-item"><input type="checkbox" id="cust-fFiles" checked> <i class="fas fa-file-zipper"></i> ملفات</label>
+      </div>
+    </div>
+
+    <div class="status-panel">
+      <div class="status-text" id="cust-status">جاهز — أضف الروابط واضغط بدء</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="cust-bar"></div></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" id="cust-done">0</div><div class="stat-lbl">منتهي</div></div>
+        <div class="stat-box"><div class="stat-val" id="cust-total">0</div><div class="stat-lbl">إجمالي</div></div>
+        <div class="stat-box"><div class="stat-val" id="cust-phase">-</div><div class="stat-lbl">الحالة</div></div>
+      </div>
+    </div>
+
+    <div class="btn-row mb-8">
+      <button class="btn btn-primary" id="cust-startBtn"><i class="fas fa-play"></i> بدء السحب</button>
+      <button class="btn btn-danger" id="cust-stopBtn" disabled><i class="fas fa-stop"></i> إيقاف</button>
+    </div>
+    <div class="btn-row mb-8">
+      <button class="btn btn-success" id="cust-downloadBtn" disabled><i class="fas fa-file-zipper"></i> تحميل ZIP</button>
+      <button class="btn btn-warning" id="cust-driveBtn" disabled title="رفع ZIP لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+      <button class="btn btn-ghost" id="cust-clearBtn"><i class="fas fa-trash"></i> مسح</button>
+    </div>
+  </div>
+
+  <!-- PAGE: استخراج الروابط -->
+  <div class="page" id="page-extract">
+    <div class="page-header">
+      <div class="page-icon" style="background:#eaf2ff">📋</div>
+      <div><h2>استخراج كل الروابط</h2><p><span class="badge-fast">سريع جداً</span> جلب الروابط من الخرائط أو الموقع</p></div>
+    </div>
+
+    <div class="info-box">
+      <i class="fas fa-bolt"></i>
+      سأحاول جلب الروابط من <strong>sitemap.xml</strong> أولاً ليكون الاستخراج فورياً، وإذا لم تتوفر سأقوم بفحص الموقع.
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-bullseye"></i> تحديد النطاق (Scope)</div>
+      <div class="scope-box">
+        <div class="scope-title"><i class="fas fa-check-circle" style="color:green"></i> نطاق محدد:</div>
+        <input type="text" id="ext-include" class="scope-input" placeholder="مثال: /tools/">
+        <div class="scope-title"><i class="fas fa-ban" style="color:red"></i> حظر نطاق:</div>
+        <input type="text" id="ext-exclude" class="scope-input" placeholder="مثال: /search/">
+      </div>
+    </div>
+
+    <div class="status-panel">
+      <div class="status-text" id="ext-status">جاهز — افتح أي صفحة واضغط بدء</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="ext-bar"></div></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" id="ext-links">0</div><div class="stat-lbl">رابط</div></div>
+        <div class="stat-box"><div class="stat-val" id="ext-pages">0</div><div class="stat-lbl">صفحة</div></div>
+        <div class="stat-box"><div class="stat-val" id="ext-pct">0%</div><div class="stat-lbl">تقدم</div></div>
+      </div>
+    </div>
+
+    <div class="btn-row mb-8">
+      <button class="btn btn-primary" id="ext-startBtn"><i class="fas fa-play"></i> بدء الاستخراج</button>
+      <button class="btn btn-danger" id="ext-stopBtn" disabled><i class="fas fa-stop"></i> إيقاف</button>
+    </div>
+    <div class="btn-row mb-8">
+      <button class="btn btn-info" id="ext-downloadBtn" disabled><i class="fas fa-file-lines"></i> تحميل الروابط TXT</button>
+      <button class="btn btn-warning" id="ext-driveBtn" disabled title="رفع TXT لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+    </div>
+    <button class="btn btn-ghost btn-full" id="ext-clearBtn"><i class="fas fa-trash"></i> مسح</button>
+  </div>
+
+  <!-- PAGE: يدوي -->
+  <div class="page" id="page-manual">
+    <div class="page-header">
+      <div class="page-icon" style="background:#fef5e7">✋</div>
+      <div><h2>جمع يدوي</h2><p>تصفح وأضف أي صفحة بضغطة</p></div>
+    </div>
+
+    <div class="info-box">
+      <i class="fas fa-info-circle"></i>
+      تصفح الموقع بحرية، وفي كل صفحة تريدها اضغط "حفظ الصفحة" — ستُجمع في ذاكرة الإضافة للتحميل لاحقاً.
+    </div>
+
+    <button class="btn btn-primary btn-full mb-8" id="man-collectBtn">
+      <i class="fas fa-plus-circle"></i> حفظ الصفحة الحالية
+    </button>
+
+    <div class="card">
+      <div class="card-title">
+        <i class="fas fa-layer-group"></i> الصفحات المجموعة
+        <span class="url-counter-badge" id="man-counter">0</span>
+      </div>
+      <div id="man-list" style="max-height:180px;overflow-y:auto;">
+        <div class="text-muted text-center" style="padding:20px;font-size:12px;">لا توجد صفحات بعد</div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-success" id="man-downloadBtn" disabled><i class="fas fa-file-zipper"></i> تحميل ZIP</button>
+      <button class="btn btn-warning" id="man-driveBtn" disabled title="رفع ZIP لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+      <button class="btn btn-ghost" id="man-clearBtn"><i class="fas fa-trash"></i> مسح الكل</button>
+    </div>
+  </div>
+
+  <!-- PAGE: الإعدادات -->
+  <div class="page" id="page-settings">
+    <div class="page-header">
+      <div class="page-icon" style="background:#f0f3ff">⚙️</div>
+      <div><h2>الإعدادات</h2><p>تحكم كامل في سلوك الإضافة</p></div>
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-clock"></i> التوقيت</div>
+
+      <div class="settings-row">
+        <div><label>⏳ مهلة الانتظار لتحميل الصفحة</label><span class="hint">بالثواني — زد إذا الإنترنت بطيء</span></div>
+        <input type="number" id="cfg-waitDelay" value="10" min="1" max="120">
+      </div>
+      <div class="settings-row">
+        <div><label>⏱️ تأخير بين الطلبات</label><span class="hint">بالميلي ثانية — 1000 = ثانية</span></div>
+        <input type="number" id="cfg-reqDelay" value="1000" min="100" max="10000" step="100">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-layer-group"></i> حدود السحب</div>
+      <div class="settings-row">
+        <div><label>🔢 الحد الأقصى للصفحات</label><span class="hint">للموقع الكامل واستخراج الروابط</span></div>
+        <input type="number" id="cfg-maxPages" value="1000" min="10" max="10000">
+      </div>
+      <div class="settings-row">
+        <div><label>🔁 عدد إعادة المحاولة</label><span class="hint">عند فشل تحميل صفحة (شبكة بطيئة/انقطاع)</span></div>
+        <input type="number" id="cfg-retryCount" value="2" min="0" max="5">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-wifi"></i> نسخة تعمل أوفلاين</div>
+      <div class="settings-row">
+        <div><label>📦 تحميل ملفات CSS/JS وربط الروابط محلياً</label><span class="hint">بعد اكتمال السحب — يتيح فتح الملفات بدون إنترنت بنفس الشكل</span></div>
+        <div class="toggle-wrap">
+          <label class="toggle">
+            <input type="checkbox" id="cfg-downloadAssets" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-filter"></i> الفلاتر الافتراضية</div>
+      <div class="filters-grid">
+        <label class="filter-item"><input type="checkbox" id="cfg-defPages" checked> صفحات</label>
+        <label class="filter-item"><input type="checkbox" id="cfg-defText" checked> نص الصفحات</label>
+        <label class="filter-item"><input type="checkbox" id="cfg-defImages" checked> صور</label>
+        <label class="filter-item"><input type="checkbox" id="cfg-defVideos"> فيديو</label>
+        <label class="filter-item"><input type="checkbox" id="cfg-defFiles" checked> ملفات</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fab fa-google-drive"></i> Google Drive</div>
+      <div class="form-row">
+        <label>رابط Apps Script (Web App URL)</label>
+        <input type="url" id="cfg-driveUrl" placeholder="https://script.google.com/macros/s/.../exec" style="direction:ltr; font-size:11px;">
+        <div class="form-hint">الصق رابط Web App بعد نشر DriveScript_Code.gs على Google</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="cfg-driveTestBtn"><i class="fas fa-wifi"></i> اختبار</button>
+      </div>
+      <div id="cfg-driveMsg" style="display:none;font-size:11px;padding:6px 10px;border-radius:6px;margin-top:6px;"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="cfg-saveBtn"><i class="fas fa-floppy-disk"></i> حفظ الإعدادات</button>
+      <button class="btn btn-ghost" id="cfg-resetBtn"><i class="fas fa-rotate-left"></i> إعادة ضبط</button>
+    </div>
+    <div id="cfg-msg" class="success-box info-box mt-8" style="display:none;"></div>
+  </div>
+
+  <!-- PAGE: قالب XML ذكي -->
+  <div class="page" id="page-xml">
+    <div class="page-header">
+      <div class="page-icon" style="background:#e8f5e9">📋</div>
+      <div><h2>قالب XML احترافي</h2><p>إنشاء قوالب XML جاهزة للتركيب على الموقع</p></div>
+    </div>
+
+    <div class="info-box">
+      <i class="fas fa-info-circle"></i>
+      <strong>يعمل بشكل مستقل تماماً:</strong> اضغط "سحب وتوليد" وهو يجيب البيانات بنفسه مباشرة من الموقع (Sitemap/Robots/RSS/الصفحات) — لا يعتمد على أي سحب سابق من تبويبات ثانية.
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-globe"></i> الموقع المستهدف</div>
+      <div class="form-row" style="display:flex; gap:6px; align-items:flex-end;">
+        <div style="flex:1;">
+          <label>رابط الموقع</label>
+          <input type="url" id="xml-targetUrl" placeholder="https://example.com" style="width:100%; padding:8px 10px; border:1.5px solid var(--border); border-radius:var(--radius-sm); font-size:12px; direction:ltr;">
+        </div>
+        <button class="btn btn-ghost" id="xml-useTabBtn" style="height:36px;"><i class="fas fa-arrows-rotate"></i> التبويب الحالي</button>
+      </div>
+      <div class="form-row" style="margin-top:8px;">
+        <label>🔢 أقصى عدد صفحات (لخيارات: نسخة كاملة / قالب هيكلي / Master)</label>
+        <input type="number" id="xml-crawlLimit" value="50" min="5" max="300" style="width:100%; padding:8px 10px; border:1.5px solid var(--border); border-radius:var(--radius-sm); font-size:12px;">
+        <div class="form-hint">رقم أكبر = تغطية أشمل للموقع لكن وقت أطول</div>
+      </div>
+    </div>
+
+    <div class="warning-box info-box" id="xml-blogger-note" style="display:none;">
+      <i class="fas fa-triangle-exclamation"></i>
+      تم رصد أن الموقع مبني على <strong>Blogger</strong>. ملاحظة مهمة: ملف القالب (Theme XML) الرسمي محمي ولا يمكن سحبه إلا من صاحب المدونة عبر لوحة تحكم Blogger مباشرة (Theme → Edit HTML → Download). ما يعرضه هذا القسم هو <strong>قالب مستخرج فعلياً من الهيكل الظاهر</strong> للصفحات (هيدر/فوتر/تنقل) — بديل عملي ممتاز لإعادة بناء نفس الشكل، وليس ملف Blogger الأصلي.
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-file-code"></i> اختر نوع القالب</div>
+      
+      <div class="filters-grid">
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="sitemap" checked>
+          <span>📍 Sitemap.xml</span>
+        </label>
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="robots">
+          <span>🤖 Robots.txt</span>
+        </label>
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="rss">
+          <span>📰 RSS Feed</span>
+        </label>
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="schema">
+          <span>📊 JSON-LD Schema</span>
+        </label>
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="master">
+          <span>🎯 Master XML</span>
+        </label>
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="template">
+          <span>🧩 قالب هيكلي (Template)</span>
+        </label>
+        <label class="filter-item">
+          <input type="radio" name="xml-type" value="fullcopy">
+          <span>🗂️ نسخة XML كاملة للموقع</span>
+        </label>
+      </div>
+      <div class="form-hint">"نسخة XML كاملة" تزور الصفحة الرئيسية + الروابط الداخلية (من Sitemap أو زحف تلقائي) وتحط محتوى كل صفحة النصي داخل ملف XML واحد شامل — بحد أقصى للصفحات تتحكم فيه فوق.</div>
+    </div>
+
+    <div class="card">
+      <div class="settings-section-title"><i class="fas fa-sliders"></i> خيارات متقدمة</div>
+      
+      <div class="filters-grid">
+        <label class="filter-item">
+          <input type="checkbox" id="xml-includeSeo" checked>
+          <span>معايير SEO</span>
+        </label>
+        <label class="filter-item">
+          <input type="checkbox" id="xml-includeStats" checked>
+          <span>إحصائيات</span>
+        </label>
+        <label class="filter-item">
+          <input type="checkbox" id="xml-includeMeta" checked>
+          <span>بيانات وصفية</span>
+        </label>
+        <label class="filter-item">
+          <input type="checkbox" id="xml-minify">
+          <span>ضغط (Minify)</span>
+        </label>
+      </div>
+    </div>
+
+    <div id="xml-preview" class="card" style="max-height:400px;overflow-y:auto;background:#f5f5f5;border:1px solid #ddd;border-radius:6px;padding:12px;display:none;font-family:monospace;font-size:11px;line-height:1.5;color:#333;white-space:pre-wrap;word-break:break-word;">
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="xml-previewBtn"><i class="fas fa-bolt"></i> سحب وتوليد</button>
+      <button class="btn btn-success" id="xml-downloadBtn"><i class="fas fa-download"></i> تنزيل</button>
+      <button class="btn btn-warning" id="xml-driveBtn" disabled title="رفع XML لـ Google Drive"><i class="fab fa-google-drive"></i> Drive</button>
+      <button class="btn btn-ghost" id="xml-copyBtn"><i class="fas fa-copy"></i> نسخ</button>
+    </div>
+
+    <div class="text-center text-muted" id="xml-status" style="margin-top:12px;font-size:12px;"></div>
+  </div>
+
+<script src="jszip_min.js"></script>
+<script src="driveSync.js"></script>
+<script src="sidepanel.js"></script>
+</body>
+</html>

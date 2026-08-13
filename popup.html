@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 380px;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 0;
+    }
+
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 0;
+      box-shadow: none;
+      min-height: 100vh;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 2px solid #667eea;
+    }
+
+    h1 {
+      font-size: 22px;
+      color: #667eea;
+      margin-bottom: 5px;
+    }
+
+    .version {
+      font-size: 12px;
+      color: #999;
+    }
+
+    .info-box {
+      background: #f0f7ff;
+      border-left: 4px solid #667eea;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      font-size: 13px;
+      color: #333;
+    }
+
+    .option-group {
+      margin: 15px 0;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      color: #333;
+    }
+
+    select {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: border-color 0.3s;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .checkbox-group {
+      font-size: 13px;
+      color: #555;
+      background: #f8f9fa;
+      padding: 10px;
+      border-radius: 6px;
+    }
+
+    .checkbox-group label {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+      font-weight: normal;
+      cursor: pointer;
+    }
+
+    .checkbox-group label:last-child {
+      margin-bottom: 0;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin-left: 10px;
+      cursor: pointer;
+      accent-color: #667eea;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin: 15px 0;
+    }
+
+    button {
+      flex: 1;
+      border: none;
+      padding: 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+
+    #startBtn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      width: 100%;
+    }
+
+    #startBtn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    #startBtn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #openSidePanel {
+      background: #51cf66;
+      color: white;
+      width: 100%;
+    }
+
+    #openSidePanel:hover {
+      background: #40c057;
+      transform: translateY(-2px);
+    }
+
+    #status {
+      margin-top: 15px;
+      font-size: 13px;
+      color: #333;
+      background: #f0f7ff;
+      padding: 12px;
+      border-radius: 6px;
+      border-left: 4px solid #667eea;
+      min-height: 20px;
+      line-height: 1.5;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 15px;
+      font-size: 12px;
+    }
+
+    .stat-item {
+      background: #f8f9fa;
+      padding: 10px;
+      border-radius: 6px;
+      border-right: 3px solid #667eea;
+      text-align: center;
+    }
+
+    .stat-item span {
+      display: block;
+      font-size: 18px;
+      font-weight: 700;
+      color: #667eea;
+      margin-top: 5px;
+    }
+
+    footer {
+      margin-top: 20px;
+      padding-top: 15px;
+      border-top: 1px solid #e0e0e0;
+      text-align: center;
+      font-size: 11px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <header>
+      <h1>🌐 Ultimate Site Cloner Pro</h1>
+      <p class="version">v6.2 — محسّنة وموثوقة</p>
+    </header>
+
+    <div class="info-box">
+      <p>💡 <strong>نصيحة:</strong> استخدم لوحة المراقبة الجانبية للتحكم الكامل، تحديد النطاق، مستخرج القالب، وتحميل نسخة تعمل أوفلاين</p>
+    </div>
+
+    <div class="option-group">
+      <label>نوع السحب:</label>
+      <select id="crawlType">
+        <option value="single">الصفحة الحالية فقط</option>
+        <option value="full">الموقع بالكامل (ZIP منظم)</option>
+      </select>
+    </div>
+
+    <div class="option-group">
+      <label>الفلاتر النشطة:</label>
+      <div class="checkbox-group">
+        <label><input type="checkbox" id="filterText" checked> 📝 نص الصفحة (يتجاوز منع النسخ)</label>
+        <label><input type="checkbox" id="filterImages" checked> 📷 صور (أونلاين)</label>
+        <label><input type="checkbox" id="filterVideos" checked> 🎬 فيديو (أونلاين)</label>
+        <label><input type="checkbox" id="filterFiles" checked> 📦 ملفات مضغوطة/برامج</label>
+        <label><input type="checkbox" id="filterXML" checked> 📡 XML/RSS/Blogs</label>
+        <label><input type="checkbox" id="filterAssets" checked> 🌐 نسخة أوفلاين (تحميل CSS/JS)</label>
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button id="startBtn">🚀 بدء السحب</button>
+    </div>
+
+    <button id="openSidePanel">📊 فتح لوحة المراقبة الكاملة</button>
+
+    <div id="status">جاهز للبدء...</div>
+
+    <div class="stats" id="statsArea" style="display:none;">
+      <div class="stat-item">الصفحات<span id="pageCount">0</span></div>
+      <div class="stat-item">الوسائط<span id="mediaCount">0</span></div>
+    </div>
+
+    <footer>
+      <p>تم تطويره بواسطة Ultimate Site Cloner Team</p>
+    </footer>
+  </div>
+
+  <script src="jszip_min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
