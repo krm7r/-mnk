@@ -1,50 +1,97 @@
-name: Ultimate Web Scraper - Remote Crawler
+name: Ultimate Web Scraper - Full Offline Site
 
 on:
   workflow_dispatch:
     inputs:
       site_1:
-        description: 'رابط الموقع الأول (مطلوب)'
+        description: 'رابط الموقع الأول (إجباري)'
         required: true
         type: string
       site_2:
         description: 'رابط الموقع الثاني (اختياري)'
         required: false
         type: string
+        default: ''
       max_pages:
         description: 'أقصى عدد صفحات لكل موقع (1-5000)'
-        required: false
+        required: true
         default: '5000'
         type: string
       concurrency:
-        description: 'أقصى عدد صفحات متصفح تعمل معًا (1-10)'
-        required: false
+        description: 'أقصى عدد صفحات Chromium في نفس الوقت (1-10)'
+        required: true
         default: '10'
         type: string
       wait_ms:
-        description: 'وقت الانتظار بعد تحميل الصفحة بالمللي ثانية'
-        required: false
-        default: '2500'
+        description: 'انتظار بعد تحميل الصفحة بالمللي ثانية'
+        required: true
+        default: '1200'
         type: string
-      download_assets:
-        description: 'تنزيل CSS و JavaScript'
-        required: false
+      retries:
+        description: 'عدد إعادة المحاولة'
+        required: true
+        default: '2'
+        type: string
+      download_images:
+        description: 'تنزيل الصور'
+        required: true
         default: true
         type: boolean
+      download_videos:
+        description: 'تنزيل الفيديو/الصوت'
+        required: true
+        default: true
+        type: boolean
+      download_files:
+        description: 'تنزيل الملفات المباشرة مثل PDF/ZIP/DOCX'
+        required: true
+        default: true
+        type: boolean
+      download_css:
+        description: 'تنزيل CSS'
+        required: true
+        default: true
+        type: boolean
+      download_js:
+        description: 'تنزيل JavaScript'
+        required: true
+        default: true
+        type: boolean
+      download_fonts:
+        description: 'تنزيل الخطوط'
+        required: true
+        default: true
+        type: boolean
+      download_xml:
+        description: 'تنزيل XML/RSS/Atom'
+        required: true
+        default: true
+        type: boolean
+      download_other_assets:
+        description: 'تنزيل الموارد الأخرى التي يطلبها الموقع'
+        required: true
+        default: true
+        type: boolean
+      max_asset_mb:
+        description: 'أقصى حجم لملف مورد واحد بالميجابايت'
+        required: true
+        default: '100'
+        type: string
+      include:
+        description: 'مسارات يجب تضمينها فقط، مفصولة بفواصل (اختياري)'
+        required: false
+        default: ''
+        type: string
+      exclude:
+        description: 'مسارات يجب استثناؤها، مفصولة بفواصل (اختياري)'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   crawl:
-    name: Crawl websites
     runs-on: ubuntu-latest
-    timeout-minutes: 350
-    env:
-      SITE_1: ${{ inputs.site_1 }}
-      SITE_2: ${{ inputs.site_2 }}
-      MAX_PAGES: ${{ inputs.max_pages }}
-      CONCURRENCY: ${{ inputs.concurrency }}
-      WAIT_MS: ${{ inputs.wait_ms }}
-      DOWNLOAD_ASSETS: ${{ inputs.download_assets }}
-
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -55,35 +102,50 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Show job settings
-        run: |
-          echo "Site 1: $SITE_1"
-          echo "Site 2: ${SITE_2:-<none>}"
-          echo "Max pages/site: $MAX_PAGES"
-          echo "Global concurrency: $CONCURRENCY"
-          echo "Download assets: $DOWNLOAD_ASSETS"
-
       - name: Run crawler
-        run: npm run crawl:workflow
+        env:
+          SITE_1: ${{ inputs.site_1 }}
+          SITE_2: ${{ inputs.site_2 }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          WAIT_MS: ${{ inputs.wait_ms }}
+          RETRIES: ${{ inputs.retries }}
+          DOWNLOAD_IMAGES: ${{ inputs.download_images }}
+          DOWNLOAD_VIDEOS: ${{ inputs.download_videos }}
+          DOWNLOAD_FILES: ${{ inputs.download_files }}
+          DOWNLOAD_CSS: ${{ inputs.download_css }}
+          DOWNLOAD_JS: ${{ inputs.download_js }}
+          DOWNLOAD_FONTS: ${{ inputs.download_fonts }}
+          DOWNLOAD_XML: ${{ inputs.download_xml }}
+          DOWNLOAD_OTHER_ASSETS: ${{ inputs.download_other_assets }}
+          MAX_ASSET_MB: ${{ inputs.max_asset_mb }}
+          INCLUDE: ${{ inputs.include }}
+          EXCLUDE: ${{ inputs.exclude }}
+        run: npm run crawl
 
-      - name: Upload ZIP result
+      - name: Create ZIP
+        shell: bash
+        run: |
+          cd output
+          zip -r ../website-scrape-${{ github.run_number }}.zip .
+          cd ..
+
+      - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: website-scrape-${{ github.run_id }}
-          path: output/*.zip
-          if-no-files-found: error
+          name: website-scrape-${{ github.run_number }}
+          path: website-scrape-${{ github.run_number }}.zip
           retention-days: 7
-          compression-level: 0
+          if-no-files-found: error
 
-      - name: Upload report
+      - name: Upload report separately
         uses: actions/upload-artifact@v4
         with:
-          name: website-scrape-report-${{ github.run_id }}
-          path: output/result.json
-          if-no-files-found: warn
+          name: website-scrape-report-${{ github.run_number }}
+          path: output/crawl_report.json
           retention-days: 7
