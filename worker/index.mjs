@@ -1,194 +1,492 @@
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
-import { URL } from 'node:url';
-import archiver from 'archiver';
+import crypto from 'node:crypto';
 import { chromium } from 'playwright';
 
-const MAX_CONCURRENCY = Math.min(10, Math.max(1, Number(process.env.CONCURRENCY || 10)));
-const MAX_SITES = Math.min(10, Math.max(1, Number(process.env.MAX_SITES || 10)));
-const MAX_PAGES = Math.min(5000, Math.max(1, Number(process.env.MAX_PAGES || 5000)));
-const WAIT_MS = Math.max(0, Number(process.env.WAIT_MS || 2500));
-const REQUEST_DELAY_MS = Math.max(0, Number(process.env.REQUEST_DELAY_MS || 150));
-const RETRIES = Math.min(3, Math.max(0, Number(process.env.RETRIES || 2)));
-const DOWNLOAD_ASSETS = String(process.env.DOWNLOAD_ASSETS ?? 'true').toLowerCase() === 'true';
-const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(process.cwd(), 'output');
-const SITES_JSON = process.env.SITES_JSON || process.argv[2] || '[]';
+const ROOT = path.resolve(process.env.OUTPUT_DIR || 'output');
+const INPUT = {
+  site1: process.env.SITE_1 || '',
+  site2: process.env.SITE_2 || '',
+  maxPages: clampInt(process.env.MAX_PAGES, 5000, 1, 5000),
+  concurrency: clampInt(process.env.CONCURRENCY, 10, 1, 10),
+  waitMs: clampInt(process.env.WAIT_MS, 1200, 0, 15000),
+  retryCount: clampInt(process.env.RETRIES, 2, 0, 5),
+  timeoutMs: clampInt(process.env.TIMEOUT_MS, 45000, 5000, 120000),
+  downloadImages: envBool('DOWNLOAD_IMAGES', true),
+  downloadVideos: envBool('DOWNLOAD_VIDEOS', true),
+  downloadFiles: envBool('DOWNLOAD_FILES', true),
+  downloadCss: envBool('DOWNLOAD_CSS', true),
+  downloadJs: envBool('DOWNLOAD_JS', true),
+  downloadFonts: envBool('DOWNLOAD_FONTS', true),
+  downloadXml: envBool('DOWNLOAD_XML', true),
+  downloadOtherAssets: envBool('DOWNLOAD_OTHER_ASSETS', true),
+  maxAssetMB: clampInt(process.env.MAX_ASSET_MB, 100, 1, 500),
+  include: splitCsv(process.env.INCLUDE),
+  exclude: splitCsv(process.env.EXCLUDE)
+};
 
-function log(...a) { console.log(new Date().toISOString(), ...a); }
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function normalizeUrl(raw) {
-  try { const u = new URL(raw); u.hash = ''; return u.href; } catch { return null; }
-}
-function sameHost(a, b) { try { return new URL(a).hostname === new URL(b).hostname; } catch { return false; } }
-function inScope(url, include = [], exclude = []) {
-  const s = url.toLowerCase();
-  if (exclude.some(x => x && s.includes(x.toLowerCase().trim()))) return false;
-  return include.length ? include.some(x => x && s.includes(x.toLowerCase().trim())) : true;
-}
-function safeName(url, isXml = false) {
-  const u = new URL(url);
-  let n = u.pathname === '/' ? 'index' : u.pathname.replace(/\//g, '_').replace(/^_/, '');
-  n = n.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 180) || 'index';
-  const ext = isXml ? '.xml' : '.html';
-  if (!n.toLowerCase().endsWith(ext)) n += ext;
-  return n;
-}
-function uniqueFileName(base, used) {
-  if (!used.has(base)) { used.add(base); return base; }
-  const ext = path.extname(base), stem = base.slice(0, -ext.length);
-  let i = 1, n = `${stem}_${i}${ext}`;
-  while (used.has(n)) n = `${stem}_${++i}${ext}`;
-  used.add(n); return n;
+const sites = [INPUT.site1, INPUT.site2].map(s => normalizeUrl(s)).filter(Boolean);
+if (!sites.length) throw new Error('ضع SITE_1 على الأقل.');
+
+await fs.rm(ROOT, { recursive: true, force: true });
+await fs.mkdir(ROOT, { recursive: true });
+
+const browser = await chromium.launch({ headless: true });
+const globalLimiter = createSemaphore(INPUT.concurrency);
+const global = {
+  startedAt: new Date().toISOString(),
+  pages: 0,
+  savedResources: 0,
+  failed: 0,
+  sites: []
+};
+
+try {
+  const results = await Promise.all(sites.map(siteUrl => crawlSite(siteUrl)));
+  global.sites.push(...results);
+} finally {
+  await browser.close();
 }
 
-async function sitemapUrls(start, max = MAX_PAGES) {
-  const origin = new URL(start).origin;
-  const roots = [`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`];
-  const seen = new Set(), found = new Set();
-  async function walk(u, depth = 0) {
-    if (depth > 3 || seen.has(u) || found.size >= max) return;
-    seen.add(u);
+global.finishedAt = new Date().toISOString();
+await writeJson(path.join(ROOT, 'crawl_report.json'), global);
+await fs.writeFile(path.join(ROOT, 'README_OFFLINE.txt'), makeReadme(global), 'utf8');
+console.log(JSON.stringify(global, null, 2));
+
+async function crawlSite(startUrl) {
+  const origin = new URL(startUrl).origin;
+  const siteHost = new URL(startUrl).hostname;
+  const siteKey = safeName(siteHost);
+  const siteRoot = path.join(ROOT, 'sites', siteKey);
+  const dirs = {
+    pages: path.join(siteRoot, 'pages'),
+    assets: path.join(siteRoot, 'assets'),
+    media: path.join(siteRoot, 'media'),
+    files: path.join(siteRoot, 'files'),
+    metadata: path.join(siteRoot, 'metadata'),
+    texts: path.join(siteRoot, 'texts')
+  };
+  await Promise.all(Object.values(dirs).map(d => fs.mkdir(d, { recursive: true })));
+
+  const urlMap = new Map();
+  const resourceMap = new Map();
+  const cssFiles = new Map();
+  const queue = [];
+  const queued = new Set();
+  const visited = new Set();
+  const failed = [];
+  const linksFound = new Set();
+  const pageRecords = [];
+  let active = 0;
+  let stopped = false;
+
+  const inScope = (u) => {
     try {
-      const r = await fetch(u, { redirect: 'follow' });
+      const x = new URL(u);
+      if (x.hostname !== siteHost) return false;
+      const clean = canonicalUrl(x.href);
+      if (INPUT.exclude.some(v => clean.toLowerCase().includes(v.toLowerCase()))) return false;
+      if (INPUT.include.length && !INPUT.include.some(v => clean.toLowerCase().includes(v.toLowerCase()))) return false;
+      return true;
+    } catch { return false; }
+  };
+
+  const enqueue = (u) => {
+    if (!u || visited.has(u) || queued.has(u) || queue.length + visited.size >= INPUT.maxPages) return;
+    if (!inScope(u)) return;
+    queued.add(u);
+    queue.push(u);
+  };
+
+  enqueue(startUrl);
+  for (const u of await getSitemapUrls(startUrl, INPUT.maxPages)) enqueue(u);
+
+  // If sitemap populated the queue, still crawl each page and discover additional internal links.
+  // If it did not, normal BFS discovery takes over.
+  while (!stopped) {
+    while (active < INPUT.concurrency && queue.length && visited.size + active < INPUT.maxPages) {
+      const url = queue.shift();
+      queued.delete(url);
+      if (visited.has(url)) continue;
+      visited.add(url);
+      active++;
+      processPageWithGlobalLimit(url).finally(() => { active--; }).catch(() => {});
+    }
+
+    if (!queue.length && active === 0) break;
+    await sleep(80);
+  }
+
+  // Final rewrite pass: page HTML and CSS now know the complete URL -> local file mapping.
+  for (const record of pageRecords) {
+    const html = await fs.readFile(record.absolutePath, 'utf8');
+    const rewritten = rewriteHtml(html, record.url, record.siteRel, urlMap, resourceMap);
+    await fs.writeFile(record.absolutePath, rewritten, 'utf8');
+    if (record.text) {
+      const txtName = record.fileName.replace(/\.(html|xhtml|xml)$/i, '') + '.txt';
+      await fs.writeFile(path.join(dirs.texts, txtName), record.text, 'utf8');
+    }
+  }
+
+  for (const [cssPath, meta] of cssFiles) {
+    try {
+      const css = await fs.readFile(cssPath, 'utf8');
+      const cssSiteRel = path.relative(siteRoot, cssPath).replaceAll(path.sep, '/');
+      const rewritten = rewriteCss(css, meta.url, cssSiteRel, resourceMap);
+      await fs.writeFile(cssPath, rewritten, 'utf8');
+    } catch {}
+  }
+
+  const report = {
+    site: startUrl,
+    origin,
+    pages: pageRecords.length,
+    linksFound: linksFound.size,
+    resources: resourceMap.size,
+    failed,
+    pageMap: Object.fromEntries(urlMap),
+    resourceMap: Object.fromEntries(resourceMap),
+    generatedAt: new Date().toISOString()
+  };
+  await writeJson(path.join(dirs.metadata, 'site_report.json'), report);
+  await fs.writeFile(path.join(dirs.metadata, 'all_links.txt'), [...linksFound].sort().join('\n'), 'utf8');
+
+  global.pages += pageRecords.length;
+  global.savedResources += resourceMap.size;
+  global.failed += failed.length;
+
+  return report;
+
+  async function processPageWithGlobalLimit(url) {
+    const release = await globalLimiter.acquire();
+    try { return await processPage(url); } finally { release(); }
+  }
+
+  async function processPage(url) {
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      serviceWorkers: 'allow',
+      viewport: { width: 1365, height: 900 }
+    });
+    const page = await context.newPage();
+    const responsePromises = new Map();
+    const pageResourceUrls = new Set();
+
+    const onResponse = async (response) => {
+      try {
+        const rurl = canonicalUrl(response.url());
+        if (!rurl || rurl.startsWith('data:') || rurl.startsWith('blob:')) return;
+        const req = response.request();
+        const type = req.resourceType();
+        const contentType = (response.headers()['content-type'] || '').split(';')[0].trim().toLowerCase();
+        pageResourceUrls.add(rurl);
+        if (!shouldSaveResource(rurl, type, contentType)) return;
+        const p = saveResponse(response, rurl, type, contentType);
+        responsePromises.set(rurl, p);
+      } catch {}
+    };
+    page.on('response', onResponse);
+
+    try {
+      let loaded = false;
+      for (let attempt = 0; attempt <= INPUT.retryCount && !loaded; attempt++) {
+        try {
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: INPUT.timeoutMs });
+          loaded = true;
+        } catch (e) {
+          if (attempt === INPUT.retryCount) throw e;
+          await sleep(800 * (attempt + 1));
+        }
+      }
+
+      await sleep(INPUT.waitMs);
+      try { await page.waitForLoadState('networkidle', { timeout: 8000 }); } catch {}
+      // Small lazy-load trigger: scroll progressively so lazy images/resources appear in network capture.
+      await autoScroll(page);
+      await sleep(Math.min(INPUT.waitMs, 1500));
+
+      const extracted = await page.evaluate(() => {
+        const abs = (v) => { try { return new URL(v, location.href).href; } catch { return null; } };
+        const set = new Set();
+        const media = new Set();
+        const assets = new Set();
+        const push = (v, bucket = set) => { const u = abs(v); if (u) bucket.add(u); };
+        document.querySelectorAll('a[href], link[href], script[src], img[src], video[src], source[src], iframe[src], object[data], embed[src], input[src], track[src], image[href], image[xlink\:href]').forEach(el => {
+          ['href','src','data','xlink:href','poster'].forEach(a => { if (el.getAttribute(a)) push(el.getAttribute(a), set); });
+          if (el.getAttribute('src')) push(el.getAttribute('src'), media);
+        });
+        document.querySelectorAll('[srcset]').forEach(el => el.getAttribute('srcset').split(',').forEach(x => push(x.trim().split(/\s+/)[0], media)));
+        document.querySelectorAll('[style]').forEach(el => { const s = el.getAttribute('style') || ''; for (const m of s.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)) push(m[1], media); });
+        for (const el of document.querySelectorAll('a[href]')) push(el.getAttribute('href'));
+        for (const el of document.querySelectorAll('link[rel="stylesheet"][href], script[src], link[rel*="icon"][href]')) {
+          push(el.getAttribute('href') || el.getAttribute('src'), assets);
+        }
+        document.querySelectorAll('meta[property="og:image"][content], meta[name="twitter:image"][content]').forEach(el => push(el.getAttribute('content'), media));
+        const text = document.body?.innerText || document.body?.textContent || '';
+        return { links: [...set], media: [...media], assets: [...assets], html: document.documentElement.outerHTML, text };
+      });
+
+      for (const u of extracted.links) if (inScope(u)) { linksFound.add(u); enqueue(u); }
+      for (const u of [...extracted.media, ...extracted.assets]) pageResourceUrls.add(canonicalUrl(u));
+      for (const u of pageResourceUrls) await waitResource(responsePromises.get(u));
+
+      // Fetch important URLs not requested by the browser (lazy assets, CSS URLs, file links) with the same context cookies.
+      const candidates = [...new Set([...extracted.media, ...extracted.assets])];
+      for (const u of candidates) {
+        if (resourceMap.has(u) || !shouldSaveCandidate(u)) continue;
+        await downloadUrl(u, context);
+      }
+
+      const fileName = pageFileName(url);
+      const absolutePath = path.join(dirs.pages, fileName);
+      await fs.writeFile(absolutePath, extracted.html, 'utf8');
+      urlMap.set(canonicalUrl(url), path.relative(path.dirname(absolutePath), absolutePath).replaceAll(path.sep, '/'));
+      pageRecords.push({ url, fileName, absolutePath, siteRel: path.relative(siteRoot, absolutePath).replaceAll(path.sep, '/'), text: extracted.text });
+
+      // Direct-download links: retain them in the site report and download when configured.
+      const direct = extracted.links.filter(isDownloadUrl);
+      for (const u of direct) {
+        linksFound.add(u);
+        if (INPUT.downloadFiles) await downloadUrl(u, context);
+      }
+      console.log(`[${siteKey}] ${pageRecords.length}/${INPUT.maxPages} ${url}`);
+    } catch (e) {
+      failed.push({ url, error: String(e?.message || e) });
+      console.log(`[${siteKey}] FAILED ${url}: ${e?.message || e}`);
+    } finally {
+      page.off('response', onResponse);
+      await context.close();
+    }
+  }
+
+  async function saveResponse(response, rurl, resourceType, contentType) {
+    if (resourceMap.has(rurl)) return resourceMap.get(rurl);
+    const maxBytes = INPUT.maxAssetMB * 1024 * 1024;
+    try {
+      const body = await response.body();
+      if (body.byteLength > maxBytes) return null;
+      const local = resourceFilePath(rurl, resourceType, contentType, dirs);
+      await fs.mkdir(path.dirname(local.absolutePath), { recursive: true });
+      await fs.writeFile(local.absolutePath, body);
+      const rel = path.relative(siteRoot, local.absolutePath).replaceAll(path.sep, '/');
+      resourceMap.set(rurl, rel);
+      if (isCss(rurl, contentType)) cssFiles.set(local.absolutePath, { url: rurl });
+      return rel;
+    } catch { return null; }
+  }
+
+  async function downloadUrl(u, context) {
+    const url = canonicalUrl(u);
+    if (!url || resourceMap.has(url) || !shouldSaveCandidate(url)) return;
+    try {
+      const resp = await context.request.get(url, { timeout: INPUT.timeoutMs, failOnStatusCode: false });
+      const ct = (resp.headers()['content-type'] || '').split(';')[0].trim().toLowerCase();
+      if (!resp.ok()) return;
+      const body = await resp.body();
+      if (body.byteLength > INPUT.maxAssetMB * 1024 * 1024) return;
+      const local = resourceFilePath(url, 'other', ct, dirs);
+      await fs.mkdir(path.dirname(local.absolutePath), { recursive: true });
+      await fs.writeFile(local.absolutePath, body);
+      const rel = path.relative(siteRoot, local.absolutePath).replaceAll(path.sep, '/');
+      resourceMap.set(url, rel);
+      if (isCss(url, ct)) cssFiles.set(local.absolutePath, { url });
+    } catch {}
+  }
+}
+
+function shouldSaveResource(url, type, contentType) {
+  if (type === 'document') return false;
+  if (type === 'stylesheet') return INPUT.downloadCss;
+  if (type === 'script') return INPUT.downloadJs;
+  if (type === 'font') return INPUT.downloadFonts;
+  if (type === 'image') return INPUT.downloadImages;
+  if (type === 'media') return INPUT.downloadVideos;
+  if (/xml|rss|atom/.test(contentType) || /\.(xml|rss|atom)(?:$|[?#])/i.test(url)) return INPUT.downloadXml;
+  if (isDownloadUrl(url)) return INPUT.downloadFiles;
+  return INPUT.downloadOtherAssets;
+}
+
+function shouldSaveCandidate(url) {
+  if (/^(javascript:|mailto:|tel:|data:|blob:)/i.test(url)) return false;
+  if (isDownloadUrl(url)) return INPUT.downloadFiles;
+  if (/\.(mp4|webm|mov|mkv|avi|m4v|mp3|wav|ogg|flac)(?:$|[?#])/i.test(url)) return INPUT.downloadVideos;
+  if (/\.(css)(?:$|[?#])/i.test(url)) return INPUT.downloadCss;
+  if (/\.(js|mjs)(?:$|[?#])/i.test(url)) return INPUT.downloadJs;
+  if (/\.(woff2?|ttf|otf|eot)(?:$|[?#])/i.test(url)) return INPUT.downloadFonts;
+  if (/\.(jpe?g|png|gif|webp|svg|ico|bmp|tiff?|avif|heic)(?:$|[?#])/i.test(url)) return INPUT.downloadImages;
+  return INPUT.downloadOtherAssets;
+}
+
+function resourceFilePath(url, type, contentType, dirs) {
+  const u = new URL(url);
+  const ext = extensionFor(u.pathname, contentType, type);
+  const raw = u.pathname.split('/').pop() || `resource-${hash(url).slice(0,10)}`;
+  let base = safeName(raw.replace(/\.[^.]+$/, '')) || 'resource';
+  const name = `${base}-${hash(url).slice(0,8)}${ext}`;
+  let folder = 'assets';
+  if (type === 'image' || /image\//.test(contentType)) folder = 'media/images';
+  else if (type === 'media' || /^(video|audio)\//.test(contentType)) folder = 'media/video';
+  else if (isDownloadUrl(url) || /application\/(pdf|zip|x-rar|x-7z|octet-stream)/.test(contentType)) folder = 'files';
+  else if (type === 'font' || /font\//.test(contentType)) folder = 'assets/fonts';
+  else if (type === 'stylesheet' || /text\/css/.test(contentType) || ext === '.css') folder = 'assets/css';
+  else if (type === 'script' || /javascript/.test(contentType) || ext === '.js') folder = 'assets/js';
+  return { absolutePath: path.join(dirs[folder.split('/')[0]], ...folder.split('/').slice(1), `${name}`) };
+}
+
+function rewriteHtml(html, pageUrl, pageSiteRel, urlMap, resourceMap) {
+  let out = html;
+  const replaceUrl = (u) => {
+    try {
+      const abs = canonicalUrl(new URL(u, pageUrl).href);
+      const local = resourceMap.get(abs) || urlMap.get(abs);
+      if (!local) return u;
+      const fromDir = path.posix.dirname(pageSiteRel);
+      return path.posix.relative(fromDir, local).replace(/^\.\//, '') || path.posix.basename(local);
+    } catch { return u; }
+  };
+  // Attribute URLs.
+  out = out.replace(/(src|href|poster|data|action|xlink:href)=(['"])(.*?)\2/gi, (m, attr, q, value) => `${attr}=${q}${replaceUrl(value)}${q}`);
+  // srcset.
+  out = out.replace(/(srcset)=(['"])(.*?)\2/gi, (m, attr, q, value) => {
+    const v = value.split(',').map(item => {
+      const parts = item.trim().split(/\s+/); if (!parts[0]) return item; parts[0] = replaceUrl(parts[0]); return parts.join(' ');
+    }).join(', ');
+    return `${attr}=${q}${v}${q}`;
+  });
+  // Inline CSS url().
+  out = out.replace(/url\((['"]?)([^'"\)]+)\1\)/gi, (m, q, value) => `url(${q}${replaceUrl(value)}${q})`);
+  return out;
+}
+
+function rewriteCss(css, cssUrl, cssSiteRel, resourceMap) {
+  return css.replace(/url\((['"]?)([^'"\)]+)\1\)/gi, (m, q, value) => {
+    try {
+      const abs = canonicalUrl(new URL(value, cssUrl).href);
+      const local = resourceMap.get(abs);
+      const fromDir = path.posix.dirname(cssSiteRel);
+      const rel = local ? path.posix.relative(fromDir, local).replace(/^\.\//, '') : value;
+      return `url(${q}${rel || path.posix.basename(local || value)}${q})`;
+    } catch { return m; }
+  }).replace(/@import\s+(?:url\()?(['"])(.*?)\1/gi, (m, q, value) => {
+    try {
+      const abs = canonicalUrl(new URL(value, cssUrl).href);
+      const local = resourceMap.get(abs);
+      if (!local) return m;
+      const fromDir = path.posix.dirname(cssSiteRel);
+      const rel = path.posix.relative(fromDir, local).replace(/^\.\//, '') || path.posix.basename(local);
+      return m.replace(value, rel);
+    } catch { return m; }
+  });
+}
+
+async function getSitemapUrls(startUrl, max) {
+  const origin = new URL(startUrl).origin;
+  const candidates = [`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`];
+  const found = new Set();
+  const seen = new Set();
+  async function visit(sm, depth = 0) {
+    if (depth > 3 || seen.has(sm) || found.size >= max) return;
+    seen.add(sm);
+    try {
+      const r = await fetch(sm, { redirect: 'follow' });
       if (!r.ok) return;
       const t = await r.text();
-      const locs = [...t.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)].map(m => m[1].trim());
-      const isIndex = /<sitemap(?:index)?\b/i.test(t) || /<sitemap>/i.test(t);
+      const locs = [...t.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map(m => m[1].trim());
+      const isIndex = /<sitemapindex/i.test(t);
       for (const loc of locs) {
+        if (isIndex || /\.xml(?:$|[?#])/i.test(loc)) await visit(loc, depth + 1);
+        else if (normalizeUrl(loc)) found.add(canonicalUrl(loc));
         if (found.size >= max) break;
-        if (isIndex || /sitemap(?:[-_][^/]+)?\.xml(?:\?|$)/i.test(loc)) await walk(loc, depth + 1);
-        else { const n = normalizeUrl(loc); if (n && sameHost(n, start)) found.add(n); }
       }
     } catch {}
   }
-  for (const r of roots) await walk(r);
+  for (const c of candidates) await visit(c);
   return [...found].slice(0, max);
 }
 
-const EXTRACTOR = String.raw`(${function extractPageData() {
-  const domain = window.location.hostname;
-  const isXml = document.contentType.includes('xml') || ['rss','feed'].includes(document.documentElement.tagName.toLowerCase());
-  const abs = (raw) => { try { return new URL(raw, window.location.href).href; } catch { return null; } };
-  const links = new Set();
-  document.querySelectorAll('a[href]').forEach(a => { const u = abs(a.href); if (u && new URL(u).hostname === domain) { const x = new URL(u); x.hash=''; links.add(x.href); } });
-  const filterMedia = (exts) => {
-    const found = new Set();
-    document.querySelectorAll('img,video,source,a,link,picture,[style*="background-image"]').forEach(el => {
-      const urls=[]; if(el.src)urls.push(el.src); if(el.href)urls.push(el.href);
-      if(el.srcset)el.srcset.split(',').forEach(s=>urls.push(s.trim().split(/\s+/)[0]));
-      const bg=getComputedStyle(el).backgroundImage; const m=bg&&bg.match(/url\(['"]?([^'"()]+)['"]?\)/); if(m)urls.push(m[1]);
-      urls.forEach(x=>{const u=abs(x); if(!u)return; const clean=u.split('?')[0].split('#')[0].toLowerCase(); if(exts.some(e=>clean.endsWith('.'+e)))found.add(u);});
-    }); return [...found];
-  };
-  const dlExt=['zip','rar','7z','tar','gz','bz2','xz','iso','exe','msi','msix','dmg','pkg','deb','rpm','apk','appimage','bin','jar','run'];
-  const dlPattern=new RegExp('\\.('+dlExt.join('|')+')(?:$)','i');
-  const downloads=new Set();
-  const tryDl=(raw)=>{if(!raw)return; const hidden=String(raw).match(/#(https?:\/\/[^\s"'#]+)/i); const vals=hidden?[hidden[1]]:[raw]; for(const v of vals){const u=abs(v); if(!u)continue; const x=new URL(u); if(dlPattern.test(x.pathname)||[...x.searchParams.values()].some(q=>dlPattern.test(decodeURIComponent(q))))downloads.add(u);}};
-  document.querySelectorAll('a[href],a[download]').forEach(a=>tryDl(a.getAttribute('href')));
-  ['data-url','data-href','data-download','data-file','data-link'].forEach(attr=>document.querySelectorAll('['+attr+']').forEach(el=>tryDl(el.getAttribute(attr))));
-  document.querySelectorAll('[onclick]').forEach(el=>{const m=(el.getAttribute('onclick')||'').match(/https?:\/\/[^\s"')]+/gi); if(m)m.forEach(tryDl);});
-  const css=new Set(), js=new Set();
-  document.querySelectorAll('link[rel="stylesheet"][href]').forEach(x=>{const u=abs(x.href);if(u)css.add(u)});
-  document.querySelectorAll('script[src]').forEach(x=>{const u=abs(x.src);if(u)js.add(u)});
-  const text=(document.body?.innerText||document.body?.textContent||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
-  const hint=(sel)=>document.querySelector(sel)?.outerHTML||null;
-  const structure={header:hint('header')||hint('[role="banner"]')||hint('#header')||hint('.header'),footer:hint('footer')||hint('[role="contentinfo"]')||hint('#footer')||hint('.footer'),nav:hint('nav')||hint('[role="navigation"]')||hint('#nav')||hint('.nav')||hint('.navbar'),isBlogger:!!(document.querySelector('meta[name="generator"][content*="Blogger" i]')||document.documentElement.getAttribute('xmlns:b')||/blogspot\./i.test(location.hostname))};
-  return {html:isXml?new XMLSerializer().serializeToString(document):document.documentElement.outerHTML,title:document.title||'page_content',url:location.href,domain,isXml,links:[...links],directDownloads:[...downloads],media:{images:filterMedia(['jpg','jpeg','png','gif','webp','svg','ico','bmp','tiff','avif','heic']),videos:filterMedia(['mp4','webm','ogv','avi','mov','wmv','flv','mkv','mpeg','3gp']),files:filterMedia(['pdf','zip','rar','exe','apk','docx','xlsx','pptx','iso','dmg','7z','tar','gz']),xml:filterMedia(['xml','rss','atom'])},assets:{css:[...css],js:[...js]},structure,text};
-}})()`;
-
-async function extract(page) {
-  return page.evaluate(EXTRACTOR);
+async function autoScroll(page) {
+  await page.evaluate(async () => {
+    await new Promise(resolve => {
+      let y = 0; const step = Math.max(400, Math.floor(innerHeight * 0.8)); const timer = setInterval(() => {
+        y += step; scrollTo(0, y);
+        if (y >= document.body.scrollHeight) { clearInterval(timer); scrollTo(0, 0); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(timer); resolve(); }, 8000);
+    });
+  }).catch(() => {});
 }
 
-async function fetchAsset(context, url) {
+function resourceTypeFromContentType(ct) {
+  if (/^text\/css/.test(ct)) return 'stylesheet';
+  if (/javascript/.test(ct)) return 'script';
+  if (/^image\//.test(ct)) return 'image';
+  if (/^(video|audio)\//.test(ct)) return 'media';
+  if (/font/.test(ct)) return 'font';
+  return 'other';
+}
+
+function extensionFor(p, ct, type) {
+  const ext = path.extname(p).toLowerCase();
+  if (ext && ext.length <= 8) return ext;
+  if (/css/.test(ct) || type === 'stylesheet') return '.css';
+  if (/javascript/.test(ct) || type === 'script') return '.js';
+  if (/html/.test(ct)) return '.html';
+  if (/json/.test(ct)) return '.json';
+  if (/xml/.test(ct)) return '.xml';
+  if (/png/.test(ct)) return '.png';
+  if (/jpeg/.test(ct)) return '.jpg';
+  if (/webp/.test(ct)) return '.webp';
+  if (/svg/.test(ct)) return '.svg';
+  if (/woff2/.test(ct)) return '.woff2';
+  if (/woff/.test(ct)) return '.woff';
+  return '.bin';
+}
+
+function pageFileName(url) {
+  const u = new URL(url);
+  let p = decodeURIComponent(u.pathname).replace(/^\/+|\/+$/g, '');
+  if (!p) return `index-${hash(url).slice(0,8)}.html`;
+  p = p.replace(/\.(html?|php|aspx?|jsp)$/i, '');
+  return `${safeName(p.replace(/\//g, '__')) || 'page'}-${hash(url).slice(0,8)}.html`;
+}
+
+function canonicalUrl(raw) {
   try {
-    const r = await context.request.get(url, { timeout: 30000, failOnStatusCode: false });
-    if (!r.ok()) return null;
-    return { buffer: await r.body(), contentType: r.headers()['content-type'] || '' };
-  } catch { return null; }
+    const u = new URL(raw);
+    u.hash = '';
+    return u.href;
+  } catch { return ''; }
 }
-
-class Semaphore {
-  constructor(n) { this.n=n; this.q=[]; }
-  async acquire(){ if(this.n>0){this.n--;return;} await new Promise(r=>this.q.push(r)); }
-  release(){ const r=this.q.shift(); if(r)r(); else this.n++; }
-  async run(fn){await this.acquire();try{return await fn();}finally{this.release();}}
-}
-
-async function crawlSite(browser, spec, siteIndex, globalSem) {
-  const start = normalizeUrl(spec.url); if (!start) throw new Error(`Invalid URL: ${spec.url}`);
-  const maxPages = Math.min(MAX_PAGES, Number(spec.maxPages || MAX_PAGES));
-  const include = Array.isArray(spec.include) ? spec.include : String(spec.include||'').split(',').filter(Boolean);
-  const exclude = Array.isArray(spec.exclude) ? spec.exclude : String(spec.exclude||'').split(',').filter(Boolean);
-  const concurrency = Math.min(10, Math.max(1, Number(spec.concurrency || MAX_CONCURRENCY)));
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
-  const queue = [], queued = new Set(), visited = new Set(), pages = [], assets = {css:new Set(),js:new Set()};
-  const media = {images:new Set(),videos:new Set(),files:new Set(),xml:new Set(),directDownloads:new Set()};
-  const urlToFile = {}, usedNames = new Set(), structureSamples=[];
-  const sem = { run: fn => globalSem.run(fn) };
-  const stats={siteIndex,url:start,pages:0,discovered:0,failed:0};
-  const enqueue = u => { const n=normalizeUrl(u); if(!n||visited.has(n)||queued.has(n)||queue.length>=maxPages||!sameHost(n,start)||!inScope(n,include,exclude))return false; queued.add(n); queue.push(n); return true; };
-  const sm = await sitemapUrls(start,maxPages); sm.forEach(enqueue); if(!queued.has(start)) enqueue(start);
-  log(`[site ${siteIndex}] discovered ${queue.length} URLs`);
-  const crawlOne = async url => sem.run(async()=>{
-    let ok=false;
-    for(let attempt=0;attempt<=RETRIES&&!ok;attempt++){
-      const page=await context.newPage();
-      try{
-        await page.goto(url,{waitUntil:'domcontentloaded',timeout:60000});
-        if(WAIT_MS) await page.waitForTimeout(WAIT_MS);
-        const res=await extract(page);
-        const finalUrl=normalizeUrl(res.url)||url;
-        const fn=uniqueFileName(safeName(finalUrl,res.isXml),usedNames); urlToFile[finalUrl]=fn;
-        pages.push({url:finalUrl,fileName:fn,isXml:res.isXml,html:res.html,text:res.text});
-        res.links.forEach(enqueue);
-        for(const k of Object.keys(media)) (res.media[k]||[]).forEach(x=>media[k].add(x));
-        res.directDownloads.forEach(x=>media.directDownloads.add(x));
-        res.assets.css.forEach(x=>assets.css.add(x)); res.assets.js.forEach(x=>assets.js.add(x));
-        if(structureSamples.length<40)structureSamples.push({url:finalUrl,...res.structure});
-        visited.add(url); stats.pages=pages.length; stats.discovered=queue.length; ok=true;
-      }catch(e){if(attempt===RETRIES){stats.failed++;log(`[site ${siteIndex}] failed ${url}: ${e.message}`)}}finally{await page.close();}
+function normalizeUrl(raw) { return raw ? canonicalUrl(raw.trim()) : ''; }
+function isDownloadUrl(u) { return /\.(zip|rar|7z|tar|gz|bz2|xz|iso|exe|msi|msix|dmg|pkg|deb|rpm|apk|appimage|bin|jar|pdf|docx|xlsx|pptx|csv)(?:$|[?#])/i.test(u); }
+function isCss(u, ct='') { return /\.css(?:$|[?#])/i.test(u) || /text\/css/i.test(ct); }
+function safeName(s) { return String(s).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file'; }
+function hash(s) { return crypto.createHash('sha1').update(s).digest('hex'); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function splitCsv(v) { return String(v || '').split(',').map(x => x.trim()).filter(Boolean); }
+function envBool(k, fallback) { const v = process.env[k]; return v == null ? fallback : /^(1|true|yes|on)$/i.test(v); }
+function clampInt(v, fallback, min, max) { const n = Number.parseInt(v, 10); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; }
+function createSemaphore(limit) {
+  let active = 0;
+  const waiters = [];
+  return {
+    acquire() {
+      return new Promise(resolve => {
+        const grant = () => {
+          active++;
+          resolve(() => {
+            active--;
+            const next = waiters.shift();
+            if (next) next();
+          });
+        };
+        if (active < limit) grant(); else waiters.push(grant);
+      });
     }
-  });
-  while(queue.length && pages.length < maxPages){
-    const batch=[];
-    while(queue.length && batch.length<concurrency && pages.length+batch.length<maxPages) batch.push(queue.shift());
-    await Promise.all(batch.map(crawlOne));
-    if(REQUEST_DELAY_MS) await sleep(REQUEST_DELAY_MS);
-  }
-  const assetMap={}; const assetFiles={};
-  if(DOWNLOAD_ASSETS && (spec.downloadAssets ?? true)){
-    const all=[...assets.css,...assets.js]; let ai=0;
-    const assetUsed = new Set();
-    await Promise.all(all.map(u=>sem.run(async()=>{const a=await fetchAsset(context,u); if(!a)return; let base=path.basename(new URL(u).pathname).replace(/[^a-zA-Z0-9._-]+/g,'_')||'asset'; if(!/[.]\w+$/.test(base))base += /\.css(?:$|\?)/i.test(u)?'.css':'.js'; const fn=uniqueFileName(base,assetUsed); assetMap[u]=fn; assetFiles[fn]=a.buffer; ai++; if(ai%10===0)log(`[site ${siteIndex}] assets ${ai}/${all.length}`);}))); 
-  }
-  for(const p of pages){let h=p.html; for(const [u,f] of Object.entries(urlToFile))h=h.split(u).join(f); for(const [u,f] of Object.entries(assetMap))h=h.split(u).join('assets/'+f); p.htmlOffline=h;}
-  await context.close();
-  return {start,domain:new URL(start).hostname,pages,media:{images:[...media.images],videos:[...media.videos],files:[...media.files],xml:[...media.xml],directDownloads:[...media.directDownloads]},assetFiles,allUrls:[...new Set([...visited,...queued])],structureSamples,stats};
+  };
 }
-
-async function makeZip(results, outPath){
-  await fs.mkdir(path.dirname(outPath),{recursive:true});
-  return new Promise((resolve,reject)=>{
-    const out=fsSync.createWriteStream(outPath); const archive=archiver('zip',{zlib:{level:6}});
-    out.on('close',()=>resolve(archive.pointer())); archive.on('error',reject); archive.pipe(out);
-    for(const r of results){const folder=r.domain.replace(/[^a-zA-Z0-9._-]/g,'_'); for(const p of r.pages)archive.append(p.htmlOffline||p.html||'',{name:`${folder}/${p.fileName}`}); for(const [fn,b] of Object.entries(r.assetFiles))archive.append(b,{name:`${folder}/assets/${fn}`}); const combined=r.pages.filter(p=>p.text).map(p=>`\n\n=== ${p.url} ===\n\n${p.text}`).join(''); archive.append(combined,{name:`${folder}/all_text_combined.txt`}); archive.append(`Images:\n${r.media.images.join('\n')}\n\nVideos:\n${r.media.videos.join('\n')}\n\nFiles:\n${r.media.files.join('\n')}\n\nDownloads:\n${r.media.directDownloads.join('\n')}`,{name:`${folder}/media_links.txt`}); }
-    archive.append(JSON.stringify(results.map(r=>({domain:r.domain,start:r.start,stats:r.stats,pages:r.pages.length,media:r.media})),null,2),{name:'crawl_report.json'}); archive.finalize();
-  });
+async function waitResource(p) { if (p) try { await p; } catch {} }
+async function writeJson(file, data) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8'); }
+function makeReadme(report) {
+  return `Ultimate Web Scraper Remote v7.2\n\nتم إنشاء نسخة محلية من الصفحات والموارد التي أمكن تنزيلها.\n\nالمحتويات:\n- pages/: صفحات HTML محفوظة بعد التحميل والتنفيذ.\n- assets/: CSS/JS/fonts وغيرها.\n- media/: صور وفيديو وصوت.\n- files/: ملفات وروابط تنزيل مباشرة عندما كانت قابلة للتنزيل.\n- texts/: نص الصفحة لكل صفحة.\n- metadata/: الخرائط والتقارير والروابط.\n\nملاحظة: المواقع التي تعتمد على Backend/API/تسجيل دخول/جلسات/خدمات خارجية قد لا تعمل 100% دون اتصال، حتى لو تم حفظ ملفات الواجهة؛ النسخة المحلية تعيد بناء الموارد التي تم التقاطها وتنزيلها ولا تحول خادم الموقع إلى خادم محلي.\n\nالمواقع: ${report.sites.length}\nالصفحات: ${report.pages}\nالموارد: ${report.savedResources}\n`;
 }
-
-async function main(){
-  const parsed=JSON.parse(SITES_JSON); const sites=Array.isArray(parsed)?parsed:parsed.sites; if(!Array.isArray(sites)||!sites.length)throw new Error('SITES_JSON must contain at least one site'); if(sites.length>MAX_SITES)throw new Error(`Maximum ${MAX_SITES} sites per run`);
-  await fs.mkdir(OUTPUT_DIR,{recursive:true});
-  const browser=await chromium.launch({headless:true});
-  const globalSem = new Semaphore(MAX_CONCURRENCY);
-  const results=[];
-  try{
-    let next=0; const siteWorkers=Array.from({length:Math.min(MAX_SITES,sites.length)},async()=>{while(true){const i=next++;if(i>=sites.length)return;try{results[i]=await crawlSite(browser,sites[i],i+1,globalSem);}catch(e){results[i]={start:sites[i].url,domain:'unknown',pages:[],assetFiles:{},media:{images:[],videos:[],files:[],xml:[],directDownloads:[]},stats:{error:e.message}};log(`[site ${i+1}] ERROR ${e.message}`);}}});
-    await Promise.all(siteWorkers);
-  } finally {await browser.close();}
-  const zip=path.join(OUTPUT_DIR,`scrape_${Date.now()}.zip`); const bytes=await makeZip(results,zip); await fs.writeFile(path.join(OUTPUT_DIR,'result.json'),JSON.stringify(results,null,2)); log(`DONE ${bytes} bytes -> ${zip}`);
-}
-main().catch(e=>{console.error(e);process.exit(1)});
